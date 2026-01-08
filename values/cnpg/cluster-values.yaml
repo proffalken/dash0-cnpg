@@ -1,0 +1,27 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: test-cluster-pg
+  namespace: pgsql
+spec:
+  instances: 3
+  managed:
+    roles:
+      - name: mytestuser
+        ensure: present
+        login: true
+        superuser: false
+        createdb: true
+        createrole: false
+        passwordSecret:
+          name: atestpassword # GET THIS FROM A PROPER SECRET IN PRODUCTION!!!
+  postgresql:
+    parameters:
+      log_statment: "all"
+      log_min_duration_statement: "1000"
+      log_connections: "authorization"
+      log_disconnections: "on"
+
+
+  storage:
+    size: 10Gi
