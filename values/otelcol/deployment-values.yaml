@@ -1,0 +1,66 @@
+mode: deployment
+replicaCount: 1
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+resources:
+  limits:
+    memory: 512Mi
+  requests:
+    memory: 256Mi
+
+extraEnvs:
+  - name: DASH0_AUTHORIZATION_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: dash0-secrets
+        key: dash0-authorization-token
+
+presets:
+  clusterMetrics:
+    enabled: true
+  kubernetesEvents:
+    enabled: true
+
+config:
+  receivers:
+    postgresql:
+      endpoint: test-cluster-pg-rw.pgsql.svc.cluster.local:5432
+      databases:
+        - testdb
+      username: dash0_monitor
+      password: monitor_password # Use ${env:POSTGRES_PASSWORD} in production!
+      collection_interval: 10s
+      tls:
+        insecure: true
+        insecure_skip_verify: true
+      initial_delay: 1s
+
+  exporters:
+    otlp/dash0:
+      auth:
+        authenticator: bearertokenauth/dash0
+      endpoint: ingress.europe-west4.gcp.dash0.com:4317
+      headers:
+        Dash0-Dataset: default
+  extensions:
+    bearertokenauth/dash0:
+      scheme: Bearer
+      token: ${env:DASH0_AUTHORIZATION_TOKEN}
+
+  service:
+    extensions:
+      - bearertokenauth/dash0
+      - health_check
+    pipelines:
+      logs:
+        exporters:
+          - otlp/dash0
+      metrics:
+        receivers:
+         - postgresql
+        exporters:
+          - otlp/dash0
+      traces:
+        exporters:
+          - otlp/dash0

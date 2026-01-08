@@ -7,6 +7,7 @@ spec:
   instances: 3
   managed:
     roles:
+      # Create a user we can test applications with
       - name: mytestuser
         ensure: present
         login: true
@@ -15,9 +16,18 @@ spec:
         createrole: false
         passwordSecret:
           name: atestpassword # GET THIS FROM A PROPER SECRET IN PRODUCTION!!!
+  # Create monitoring user on initialization
+  bootstrap:
+    initdb:
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+        - CREATE USER dash0_monitor WITH PASSWORD 'monitor_password'; # Use secrets in production!
+        - GRANT pg_monitor TO dash0_monitor;
+        - GRANT SELECT ON pg_stat_statements TO dash0_monitor;
   postgresql:
+    shared_preload_libraries:
+      - "pg_stat_statements"
     parameters:
-      log_statment: "all"
       log_min_duration_statement: "1000"
       log_connections: "authorization"
       log_disconnections: "on"

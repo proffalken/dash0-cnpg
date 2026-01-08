@@ -69,7 +69,7 @@ config:
     # Create a new filelog handler to read the pod logs
     filelog:
       include: 
-        - /var/log/pods/default_*pg*/postgres/*.log
+        - /var/log/pods/*pg*/postgres/*.log
       exclude: []
       start_at: end
       include_file_path: true
