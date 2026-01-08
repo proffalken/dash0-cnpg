@@ -1,0 +1,294 @@
+mode: daemonset
+image:
+  # Use the Contrib version of the collector so we hgave access to logs and PGSQL
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.142.0"
+
+resources:
+  limits:
+    memory: 512Mi
+  requests:
+    memory: 256Mi
+
+# Add volume mounts so we can read the container logs
+extraVolumeMounts:
+  - name: varlogpods
+    mountPath: /var/log/pods
+    readOnly: true
+  - name: varlibdockercontainers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
+
+# Mount those volumes inside the container
+extraVolumes:
+  - name: varlogpods
+    hostPath:
+      path: /var/log/pods
+  - name: varlibdockercontainers
+    hostPath:
+      path: /var/lib/docker/containers
+
+# Make sure we can authenticate to Dash0
+extraEnvs:
+  - name: DASH0_AUTHORIZATION_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: dash0-secrets
+        key: dash0-authorization-token
+  - name: KUBE_NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["nodes/proxy"]
+      verbs: ["get"]
+    - apiGroups: [""]
+      resources: ["nodes"]
+      verbs: ["get", "list"]
+
+presets:
+  logsCollection:
+    enabled: false  # Disable this since we're defining our own filelog receiver
+  kubernetesAttributes:
+    enabled: true
+    extractAllPodLabels: true
+    extractAllPodAnnotations: true
+  kubeletMetrics:
+    enabled: true
+  hostMetrics:
+    enabled: true
+
+config:
+  receivers:
+    kubeletstats:
+      insecure_skip_verify: true
+    # Create a new filelog handler to read the pod logs
+    filelog:
+      include: 
+        - /var/log/pods/default_*pg*/postgres/*.log
+      exclude: []
+      start_at: end
+      include_file_path: true
+      include_file_name: false
+      operators:
+        # First parse the CRI/containerd wrapper format
+        - type: regex_parser
+          id: parser-crio
+          regex: '^(?P<time>[^ Z]+Z) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) ?(?P<log>.*)$'
+          timestamp:
+            parse_from: attributes.time
+            layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+        
+        # Extract the actual log content from the CRI wrapper
+        - type: move
+          from: attributes.log
+          to: body
+        
+
+
+  processors:
+    batch: {}
+    resourcedetection:
+      detectors:
+        - system
+        - k8snode
+      timeout: 2s
+      system:
+        resource_attributes:
+          host.name:
+            enabled: false
+
+    k8sattributes:
+      auth_type: "serviceAccount"
+      passthrough: false
+      filter:
+        node_from_env_var: KUBE_NODE_NAME
+      extract:
+        metadata:
+          - k8s.namespace.name
+          - k8s.deployment.name
+          - k8s.statefulset.name
+          - k8s.daemonset.name
+          - k8s.cronjob.name
+          - k8s.job.name
+          - k8s.node.name
+          - k8s.pod.name
+          - k8s.pod.uid
+          - k8s.pod.start_time
+        labels:
+          - tag_name: $$1
+            key_regex: (.*)
+            from: pod
+        annotations:
+          - tag_name: $$1
+            key_regex: (.*)
+            from: pod
+      pod_association:
+        - sources:
+            - from: resource_attribute
+              name: k8s.pod.ip
+        - sources:
+            - from: resource_attribute
+              name: k8s.pod.uid
+        - sources:
+            - from: connection
+
+    resource:
+      attributes:
+        - key: service.name
+          value: cloudnative-pg # Change this to match your service name
+          action: upsert
+        - key: db.system.name
+          value: postgresql
+          action: upsert
+        - key: deployment.environment.name
+          value: production
+          action: upsert
+    transform/parse_postgres:
+      log_statements:
+        # 1. Handle only entries where the Body contains JSON
+        - context: log
+          conditions:
+            - body != nil and Substring(body, 0, 2) == "{\""
+          statements:
+            # Parse the JSON string into a map and merge into attributes
+            - merge_maps(attributes, ParseJSON(body), "upsert")
+
+            # Extract the nested "record" object which contains the actual PostgreSQL log
+            - merge_maps(attributes, attributes["record"], "upsert") where attributes["record"] != nil
+            - delete_key(attributes, "record")
+
+            # 2. Convert PostgreSQL timestamp string -> OpenTelemetry Timestamp
+            - set(time, Time(attributes["timestamp"], "%Y-%m-%d %H:%M:%S.%f %Z")) where attributes["timestamp"] != nil
+            - set(observed_time, time)
+            - delete_key(attributes, "timestamp")
+
+            # 3. Map PostgreSQL error_severity -> OTel SeverityText
+            - set(severity_text, ToUpperCase(attributes["error_severity"])) where attributes["error_severity"] != nil
+
+            # 4. Map PostgreSQL error_severity -> OTel SeverityNumber
+            - set(severity_number, 5) where IsMatch(attributes["error_severity"], "^DEBUG")
+            - set(severity_number, 9) where attributes["error_severity"] == "INFO"
+            - set(severity_number, 10) where attributes["error_severity"] == "NOTICE"
+            - set(severity_number, 12) where attributes["error_severity"] == "LOG"
+            - set(severity_number, 13) where attributes["error_severity"] == "WARNING"
+            - set(severity_number, 17) where attributes["error_severity"] == "ERROR"
+            - set(severity_number, 21) where attributes["error_severity"] == "FATAL"
+            - set(severity_number, 24) where attributes["error_severity"] == "PANIC"
+
+            # Clean up fields that have been promoted or replaced
+            - delete_key(attributes, "error_severity")
+
+            # Map standard semantic conventions
+            - set(attributes["user.name"], attributes["user"])
+            - set(attributes["db.namespace"], attributes["dbname"])
+            - set(attributes["client.address"], attributes["remote_host"])
+            - set(attributes["client.port"], attributes["remote_port"])
+            - set(attributes["db.response.status_code"], attributes["state_code"])
+            - set(attributes["process.status"], attributes["ps"])
+            - set(attributes["process.parent_pid"], attributes["leader_pid"])
+            - set(attributes["session.id"], attributes["session_id"])
+            - set(attributes["code.function.name"], attributes["func_name"])
+            - set(attributes["code.file.path"], attributes["file_name"])
+            - set(attributes["code.line.number"], Int(attributes["file_line_num"]))
+            - set(attributes["log.record.original"], body)
+            - set(body, attributes["message"])
+
+            # PostgreSQL-specific extensions
+            - set(attributes["postgresql.session_id"], attributes["session_id"])
+            - set(attributes["postgresql.txid"], attributes["txid"])
+            - set(attributes["postgresql.vxid"], attributes["vxid"])
+            - set(attributes["postgresql.query_id"], attributes["query_id"])
+            - set(attributes["postgresql.internal_query"], attributes["internal_query"])
+            - set(attributes["postgresql.backend_type"], attributes["backend_type"])
+            - set(attributes["postgresql.detail"], attributes["detail"])
+            - set(attributes["postgresql.hint"], attributes["hint"])
+            - set(attributes["postgresql.context"], attributes["context"])
+            - set(attributes["postgresql.line_num"], Int(attributes["line_num"]))
+            - set(attributes["postgresql.cursor_position"], Int(attributes["cursor_position"]))
+            - set(attributes["postgresql.internal_position"], Int(attributes["internal_position"]))
+            - set(attributes["postgresql.application_name"], attributes["application_name"])
+
+            # Cleanup redundant fields
+            - delete_key(attributes, "timestamp")
+            - delete_key(attributes, "message")
+            - delete_key(attributes, "error_severity")
+            - delete_key(attributes, "dbname")
+            - delete_key(attributes, "user")
+            - delete_key(attributes, "statement")
+            - delete_key(attributes, "state_code")
+            - delete_key(attributes, "remote_host")
+            - delete_key(attributes, "remote_port")
+            - delete_key(attributes, "application_name")
+            - delete_key(attributes, "leader_pid")
+            - delete_key(attributes, "file_name")
+            - delete_key(attributes, "func_name")
+            - delete_key(attributes, "file_line_num")
+            - delete_key(attributes, "session_id")
+            - delete_key(attributes, "txid")
+            - delete_key(attributes, "vxid")
+            - delete_key(attributes, "query_id")
+            - delete_key(attributes, "internal_query")
+            - delete_key(attributes, "backend_type")
+            - delete_key(attributes, "detail")
+            - delete_key(attributes, "hint")
+            - delete_key(attributes, "context")
+            - delete_key(attributes, "line_num")
+            - delete_key(attributes, "cursor_position")
+            - delete_key(attributes, "internal_position")
+
+            - set(resource.attributes["process.id"], log.attributes["pid"])
+
+        # Extract the message fields
+        - context: log
+          statements:
+            - merge_maps(attributes, ExtractPatterns(body, "(?:duration:\\s+(?P<pg_duration_ms>[0-9.]+)\\s+ms)?(?:\\s*statement:\\s+(?P<pg_statement>.*))?$"), "upsert")
+            - set(attributes["db.query.text"], attributes["pg_statement"])
+            - set(attributes["db.query.text"], attributes["statement"])
+            - set(attributes["db.query.duration"], Double(attributes["pg_duration_ms"])) where attributes["pg_duration_ms"] != ""
+            - delete_key(attributes, "pg_statement")
+            - delete_key(attributes, "statement")
+            - delete_key(attributes, "pg_duration_ms")
+            - delete_key(attributes, "pg_statement")
+
+    
+
+  exporters:
+    otlp/dash0:
+      auth:
+        authenticator: bearertokenauth/dash0
+      endpoint: ingress.europe-west4.gcp.dash0.com:4317
+      headers:
+        Dash0-Dataset: default
+    debug:
+      verbosity: detailed
+      sampling_initial: 5
+      sampling_thereafter: 5
+
+  extensions:
+    bearertokenauth/dash0:
+      scheme: Bearer
+      token: ${env:DASH0_AUTHORIZATION_TOKEN}
+
+  service:
+    telemetry:
+      logs:
+        level: debug
+    extensions:
+      - bearertokenauth/dash0
+      - health_check
+    pipelines:
+      logs:
+        receivers: [filelog]
+        processors: [resource, k8sattributes, resourcedetection, transform/parse_postgres, batch]  # Added k8sattributes
+        exporters: [otlp/dash0, debug]
+      metrics:
+        processors: [k8sattributes, resourcedetection, batch]
+        exporters: [otlp/dash0]
+      traces:
+        processors: [k8sattributes, resourcedetection, batch]
+        exporters: [otlp/dash0]
