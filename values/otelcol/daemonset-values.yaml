@@ -246,14 +246,11 @@ config:
         # Extract the message fields
         - context: log
           statements:
-            - merge_maps(attributes, ExtractPatterns(body, "(?:duration:\\s+(?P<pg_duration_ms>[0-9.]+)\\s+ms)?(?:\\s*statement:\\s+(?P<pg_statement>.*))?$"), "upsert")
-            - set(attributes["db.query.text"], attributes["pg_statement"])
-            - set(attributes["db.query.text"], attributes["statement"])
-            - set(attributes["db.query.duration"], Double(attributes["pg_duration_ms"])) where attributes["pg_duration_ms"] != ""
-            - delete_key(attributes, "pg_statement")
-            - delete_key(attributes, "statement")
+            - merge_maps(attributes, ExtractPatterns(body, "^(?:duration:\\s+(?P<pg_duration_ms>[0-9.]+)\\s+ms\\s+)?(?:statement:\\s+(?P<pg_statement>[\\s\\S]+?))?(?:\\n|;|$)"), "upsert")
+            - set(attributes["db.query.text"], attributes["pg_statement"]) where attributes["pg_statement"] != nil
+            - set(attributes["db.query.duration"], Double(attributes["pg_duration_ms"])) where IsMatch(attributes["pg_duration_ms"], "^[0-9.]+$")
+            - set(attributes["db.query.text"], attributes["pg_statement"]) where attributes["pg_statement"] != nil
             - delete_key(attributes, "pg_duration_ms")
-            - delete_key(attributes, "pg_statement")
 
     
 
@@ -264,10 +261,6 @@ config:
       endpoint: ingress.europe-west4.gcp.dash0.com:4317
       headers:
         Dash0-Dataset: default
-    debug:
-      verbosity: detailed
-      sampling_initial: 5
-      sampling_thereafter: 5
 
   extensions:
     bearertokenauth/dash0:
@@ -277,7 +270,7 @@ config:
   service:
     telemetry:
       logs:
-        level: debug
+        level: info
     extensions:
       - bearertokenauth/dash0
       - health_check
@@ -285,7 +278,7 @@ config:
       logs:
         receivers: [filelog]
         processors: [resource, k8sattributes, resourcedetection, transform/parse_postgres, batch]  # Added k8sattributes
-        exporters: [otlp/dash0, debug]
+        exporters: [otlp/dash0]
       metrics:
         processors: [k8sattributes, resourcedetection, batch]
         exporters: [otlp/dash0]
