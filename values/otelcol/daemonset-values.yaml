@@ -157,19 +157,15 @@ config:
           statements:
             # Parse the JSON string into a map and merge into attributes
             - merge_maps(attributes, ParseJSON(body), "upsert")
-
-            # Extract the nested "record" object which contains the actual PostgreSQL log
             - merge_maps(attributes, attributes["record"], "upsert") where attributes["record"] != nil
             - delete_key(attributes, "record")
-
-            # 2. Convert PostgreSQL timestamp string -> OpenTelemetry Timestamp
             - set(time, Time(attributes["timestamp"], "%Y-%m-%d %H:%M:%S.%f %Z")) where attributes["timestamp"] != nil
             - set(observed_time, time)
             - delete_key(attributes, "timestamp")
-
+  
             # 3. Map PostgreSQL error_severity -> OTel SeverityText
             - set(severity_text, ToUpperCase(attributes["error_severity"])) where attributes["error_severity"] != nil
-
+  
             # 4. Map PostgreSQL error_severity -> OTel SeverityNumber
             - set(severity_number, 5) where IsMatch(attributes["error_severity"], "^DEBUG")
             - set(severity_number, 9) where attributes["error_severity"] == "INFO"
@@ -179,10 +175,12 @@ config:
             - set(severity_number, 17) where attributes["error_severity"] == "ERROR"
             - set(severity_number, 21) where attributes["error_severity"] == "FATAL"
             - set(severity_number, 24) where attributes["error_severity"] == "PANIC"
-
+  
             # Clean up fields that have been promoted or replaced
             - delete_key(attributes, "error_severity")
-
+        # 1. Map PostgreSQL connection fields
+        - context: log
+          statements:
             # Map standard semantic conventions
             - set(attributes["user.name"], attributes["user"])
             - set(attributes["db.namespace"], attributes["dbname"])
@@ -197,7 +195,7 @@ config:
             - set(attributes["code.line.number"], Int(attributes["file_line_num"]))
             - set(attributes["log.record.original"], body)
             - set(body, attributes["message"])
-
+  
             # PostgreSQL-specific extensions
             - set(attributes["postgresql.session_id"], attributes["session_id"])
             - set(attributes["postgresql.txid"], attributes["txid"])
@@ -212,7 +210,7 @@ config:
             - set(attributes["postgresql.cursor_position"], Int(attributes["cursor_position"]))
             - set(attributes["postgresql.internal_position"], Int(attributes["internal_position"]))
             - set(attributes["postgresql.application_name"], attributes["application_name"])
-
+  
             # Cleanup redundant fields
             - delete_key(attributes, "timestamp")
             - delete_key(attributes, "message")
@@ -240,18 +238,20 @@ config:
             - delete_key(attributes, "line_num")
             - delete_key(attributes, "cursor_position")
             - delete_key(attributes, "internal_position")
-
+  
+        - statements:
             - set(resource.attributes["process.id"], log.attributes["pid"])
-
-        # Extract the message fields
+            - delete_key(log.attributes, "pid")
         - context: log
           statements:
-            - merge_maps(attributes, ExtractPatterns(body, "^(?:duration:\\s+(?P<pg_duration_ms>[0-9.]+)\\s+ms\\s+)?(?:statement:\\s+(?P<pg_statement>[\\s\\S]+?))?(?:\\n|;|$)"), "upsert")
-            - set(attributes["db.query.text"], attributes["pg_statement"]) where attributes["pg_statement"] != nil
-            - set(attributes["db.query.duration"], Double(attributes["pg_duration_ms"])) where IsMatch(attributes["pg_duration_ms"], "^[0-9.]+$")
-            - set(attributes["db.query.text"], attributes["pg_statement"]) where attributes["pg_statement"] != nil
+            - merge_maps(attributes, ExtractPatterns(body, "(?:duration:\\s+(?P<pg_duration_ms>[0-9.]+)\\s+ms)?(?:\\s*statement:\\s+(?P<pg_statement>.+?))?$"), "upsert")
+            - set(attributes["db.query.text"], attributes["pg_statement"]) where attributes["pg_statement"] != nil and attributes["pg_statement"] != ""
+            - set(attributes["db.query.text"], attributes["statement"]) where attributes["db.query.text"] == nil and attributes["statement"] != nil
+            - set(attributes["db.query.duration"], Double(attributes["pg_duration_ms"])) where attributes["pg_duration_ms"] != ""
+            - delete_key(attributes, "pg_statement")
+            - delete_key(attributes, "statement")
             - delete_key(attributes, "pg_duration_ms")
-
+            - delete_key(attributes, "pg_statement")
     
 
   exporters:
