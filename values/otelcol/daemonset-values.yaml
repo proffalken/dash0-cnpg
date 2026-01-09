@@ -278,7 +278,7 @@ config:
       logs:
         receivers: [filelog]
         processors: [resource, k8sattributes, resourcedetection, transform/parse_postgres, batch]  # Added k8sattributes
-        exporters: [otlp/dash0, debug]
+        exporters: [otlp/dash0]
       metrics:
         processors: [k8sattributes, resourcedetection, batch]
         exporters: [otlp/dash0]
