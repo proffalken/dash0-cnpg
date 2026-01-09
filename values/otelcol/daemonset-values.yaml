@@ -245,8 +245,8 @@ config:
         - context: log
           statements:
             - merge_maps(attributes, ExtractPatterns(body, "(?:duration:\\s+(?P<pg_duration_ms>[0-9.]+)\\s+ms)?(?:\\s*statement:\\s+(?P<pg_statement>.+?))?$"), "upsert")
-            - set(attributes["db.query.text"], attributes["pg_statement"])
-            - set(attributes["db.query.text"], attributes["statement"])
+            - set(attributes["db.query.text"], attributes["pg_statement"]) where attributes["pg_statement"] != nil and attributes["pg_statement"] != ""
+            - set(attributes["db.query.text"], attributes["statement"]) where attributes["db.query.text"] == nil and attributes["statement"] != nil
             - set(attributes["db.query.duration"], Double(attributes["pg_duration_ms"])) where attributes["pg_duration_ms"] != ""
             - delete_key(attributes, "pg_statement")
             - delete_key(attributes, "statement")
