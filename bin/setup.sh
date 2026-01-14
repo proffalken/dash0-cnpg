@@ -47,6 +47,7 @@ helm upgrade --install \
   --set operator.dash0Export.enabled=true \
   --set operator.dash0Export.endpoint=${DASH0_ENDPOINT} \
   --set operator.dash0Export.apiEndpoint=${DASH0_API_ENDPOINT}\
+  --set operator.dash0Export.dataset=magnus \
   --set operator.dash0Export.secretRef.name=dash0-authorization-secret \
   --set operator.dash0Export.secretRef.key=token \
   dash0-operator \
