@@ -24,6 +24,13 @@ else
   echo "=== Dash0 API Endpoint set. Proceeding..."
 fi
 
+### Check for optional dataset argument
+DATASET_FLAG=""
+if [[ -n "$1" ]]; then
+  DATASET_FLAG="--set operator.dash0Export.dataset=$1"
+  echo "=== Using Dash0 dataset: $1"
+fi
+
 echo -n "=== Installing helm charts"
 helm repo add dash0-operator https://dash0hq.github.io/dash0-operator
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
@@ -46,8 +53,8 @@ helm upgrade --install \
   --namespace dash0-system \
   --set operator.dash0Export.enabled=true \
   --set operator.dash0Export.endpoint=${DASH0_ENDPOINT} \
-  --set operator.dash0Export.apiEndpoint=${DASH0_API_ENDPOINT}\
-  --set operator.dash0Export.dataset=magnus \
+  --set operator.dash0Export.apiEndpoint=${DASH0_API_ENDPOINT} \
+  ${DATASET_FLAG} \
   --set operator.dash0Export.secretRef.name=dash0-authorization-secret \
   --set operator.dash0Export.secretRef.key=token \
   dash0-operator \
