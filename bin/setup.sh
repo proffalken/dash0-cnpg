@@ -1,5 +1,68 @@
 #!/bin/bash
 
+show_help() {
+  cat << EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Setup script for deploying CloudNative PostgreSQL with Dash0 monitoring.
+
+OPTIONS:
+  -d, --dataset NAME    Specify the Dash0 dataset name to send telemetry data to.
+                        If not specified, the default dataset will be used.
+  -h, --help            Display this help message and exit.
+
+REQUIRED ENVIRONMENT VARIABLES:
+  DASH0_AUTH_TOKEN      Your Dash0 authentication token
+  DASH0_ENDPOINT        Your Dash0 endpoint URL
+  DASH0_API_ENDPOINT    Your Dash0 API endpoint URL
+
+EXAMPLES:
+  # Use default dataset
+  ./$(basename "$0")
+
+  # Send data to a specific dataset
+  ./$(basename "$0") --dataset magnus
+  ./$(basename "$0") -d production
+
+EOF
+  exit 0
+}
+
+### Parse command line arguments
+DATASET_NAME=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help)
+      show_help
+      ;;
+    -d|--dataset)
+      if [[ -z "$2" || "$2" == -* ]]; then
+        echo "=== ERROR: --dataset requires a value"
+        exit 1
+      fi
+      DATASET_NAME="$2"
+      shift 2
+      ;;
+    *)
+      echo "=== ERROR: Unknown option: $1"
+      echo "Use -h or --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
+### Validate dataset name if provided
+if [[ -n "$DATASET_NAME" ]]; then
+  # Check for invalid characters (allow alphanumeric, hyphens, underscores)
+  if [[ ! "$DATASET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "=== ERROR: Dataset name '$DATASET_NAME' contains invalid characters."
+    echo "Only alphanumeric characters, hyphens, and underscores are allowed."
+    exit 1
+  fi
+  echo "=== Using Dash0 dataset: $DATASET_NAME"
+fi
+
 echo -n "=== INFO: Working in $(pwd)"
 
 ### Check the environment variables are set
@@ -24,11 +87,10 @@ else
   echo "=== Dash0 API Endpoint set. Proceeding..."
 fi
 
-### Check for optional dataset argument
+### Set dataset flag for helm if dataset name was provided
 DATASET_FLAG=""
-if [[ -n "$1" ]]; then
-  DATASET_FLAG="--set operator.dash0Export.dataset=$1"
-  echo "=== Using Dash0 dataset: $1"
+if [[ -n "$DATASET_NAME" ]]; then
+  DATASET_FLAG="--set operator.dash0Export.dataset=$DATASET_NAME"
 fi
 
 echo -n "=== Installing helm charts"

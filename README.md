@@ -8,14 +8,23 @@ Make sure you have a working kubernetes cluster (I use [k3s](https://k3s.io/)) a
 
 Once that's working, clone this repo to your local machine and run `./bin/setup.sh`, which will show you the variables that you need to set and then install everything.
 
-Optionally, you can specify a Dash0 dataset name as an argument:
+### Usage
+
+For help and available options:
 ```bash
-./bin/setup.sh <dataset-name>
+./bin/setup.sh --help
 ```
 
-For example, to send data to a dataset called "magnus":
+To use the default dataset:
 ```bash
-./bin/setup.sh magnus
+./bin/setup.sh
 ```
 
-If no dataset is specified, the default dataset will be used.
+To send data to a specific dataset:
+```bash
+./bin/setup.sh --dataset magnus
+# or using the short flag
+./bin/setup.sh -d magnus
+```
+
+Dataset names can only contain alphanumeric characters, hyphens, and underscores.
