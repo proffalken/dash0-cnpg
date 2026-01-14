@@ -7,3 +7,24 @@ Example Kubernetes values for [CloudNative Postgresql](https://cloudnative-pg.io
 Make sure you have a working kubernetes cluster (I use [k3s](https://k3s.io/)) and that `kubectl get nodes` returns a list of the nodes in the cluster.
 
 Once that's working, clone this repo to your local machine and run `./bin/setup.sh`, which will show you the variables that you need to set and then install everything.
+
+### Usage
+
+For help and available options:
+```bash
+./bin/setup.sh --help
+```
+
+To use the default dataset:
+```bash
+./bin/setup.sh
+```
+
+To send data to a specific dataset:
+```bash
+./bin/setup.sh --dataset magnus
+# or using the short flag
+./bin/setup.sh -d magnus
+```
+
+Dataset names can only contain alphanumeric characters, hyphens, and underscores.
